@@ -341,16 +341,18 @@ if test true != "${STA_ONLY}"; then
     bash -c 'cat > /bin/rpi-wifi.sh' <<EOF
 #!/bin/bash
 echo 'Starting Wifi AP and STA client...'
-ifdown --force wlan0
-ifdown --force ap0
-ifup ap0
-ifup wlan0
+/sbin/ifdown --force wlan0
+/sbin/ifdown --force ap0
+/sbin/ifup ap0
+/sbin/ifup wlan0
 $([ "${NO_INTERNET-}" != "true" ] && echo "sysctl -w net.ipv4.ip_forward=1")
 $([ "${NO_INTERNET-}" != "true" ] && echo "iptables -t nat -A POSTROUTING -s ${AP_IP_BEGIN}.0/24 ! -d ${AP_IP_BEGIN}.0/24 -j MASQUERADE")
 $([ "${NO_INTERNET-}" != "true" ] && echo "systemctl restart dnsmasq")
 echo 'WPA Supplicant reconfigure in 5sec...'
 sleep 5
-wpa_cli -i wlan0 reconfigure
+/sbin/wpa_cli -i wlan0 reconfigure
+/sbin/iw dev wlan0 set power_save off
+/sbin/iw dev ap0 set power_save off
 
 EOF
     chmod +x /bin/rpi-wifi.sh
