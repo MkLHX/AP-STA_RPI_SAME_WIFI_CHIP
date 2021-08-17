@@ -213,10 +213,9 @@ if test true != "${STA_ONLY}"; then
     # Populate `/etc/udev/rules.d/70-persistent-net.rules`
     _logger "Populate /etc/udev/rules.d/70-persistent-net.rules"
     bash -c 'cat > /etc/udev/rules.d/70-persistent-net.rules' <<EOF
-SUBSYSTEM=="ieee80211", ACTION=="add|change", ATTR{macaddress}=="${MAC_ADDRESS}", KERNEL=="phy0", \
-RUN+="/sbin/iw phy phy0 interface add ap0 type __ap", \
-RUN+="/bin/ip link set ap0 address ${MAC_ADDRESS}
-
+SUBSYSTEM=="ieee80211", ACTION=="add|change", KERNEL=="phy0", \
+  RUN+="/sbin/iw phy phy0 interface add ap0 type __ap", \
+  RUN+="/bin/ip link set ap0 address \$attr{macaddress}"
 EOF
 fi
 
@@ -243,16 +242,17 @@ ctrl_interface=/var/run/hostapd
 ctrl_interface_group=0
 interface=ap0
 driver=nl80211
+ieee80211n=1
 ssid=${AP_SSID}
 hw_mode=${WIFI_MODE}
 channel=11
-wmm_enabled=0
+wmm_enabled=1
 macaddr_acl=0
 auth_algs=1
-wpa=2PASSPHRASE
+wpa=2
 $([ $AP_PASSPHRASE ] && echo "wpa_passphrase=${AP_PASSPHRASE}")
 wpa_key_mgmt=WPA-PSK
-wpa_pairwise=TKIP CCMP
+wpa_pairwise=TKIP
 rsn_pairwise=CCMP
 
 EOF
@@ -326,9 +326,9 @@ if test true != "${STA_ONLY}"; then
 # in our case, it cannot start when /var/run/hostapd/ap0 exist
 # so we have to delete it
 echo 'Check if hostapd.service is hang cause ap0 exist...'
-hostapd_is_running=\$(service hostapd status | grep -c "Active: active (running)")
-if test 1 -ne "\${hostapd_is_running}"; then
-    rm -rf /var/run/hostapd/ap0 | echo "ap0 interface does not exist, the faillure is elsewhere"
+hostapd_is_running=\$(systemctl status hostapd | grep -c "Active: active (running)")
+if test 1 -ne $hostapd_is_running; then
+    rm -rf /var/run/hostapd/ap0 | echo "ap0 interface does not exist, the failure is elsewhere"
 fi
 
 EOF
@@ -341,16 +341,18 @@ if test true != "${STA_ONLY}"; then
     bash -c 'cat > /bin/rpi-wifi.sh' <<EOF
 #!/bin/bash
 echo 'Starting Wifi AP and STA client...'
-ifdown --force wlan0
-ifdown --force ap0
-ifup ap0
-ifup wlan0
+/sbin/ifdown --force wlan0
+/sbin/ifdown --force ap0
+/sbin/ifup ap0
+/sbin/ifup wlan0
 $([ "${NO_INTERNET-}" != "true" ] && echo "sysctl -w net.ipv4.ip_forward=1")
 $([ "${NO_INTERNET-}" != "true" ] && echo "iptables -t nat -A POSTROUTING -s ${AP_IP_BEGIN}.0/24 ! -d ${AP_IP_BEGIN}.0/24 -j MASQUERADE")
 $([ "${NO_INTERNET-}" != "true" ] && echo "systemctl restart dnsmasq")
 echo 'WPA Supplicant reconfigure in 5sec...'
 sleep 5
-wpa_cli -i wlan0 reconfigure
+/sbin/wpa_cli -i wlan0 reconfigure
+/sbin/iw dev wlan0 set power_save off
+/sbin/iw dev ap0 set power_save off
 
 EOF
     chmod +x /bin/rpi-wifi.sh
