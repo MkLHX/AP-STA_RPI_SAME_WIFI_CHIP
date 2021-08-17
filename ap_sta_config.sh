@@ -213,10 +213,9 @@ if test true != "${STA_ONLY}"; then
     # Populate `/etc/udev/rules.d/70-persistent-net.rules`
     _logger "Populate /etc/udev/rules.d/70-persistent-net.rules"
     bash -c 'cat > /etc/udev/rules.d/70-persistent-net.rules' <<EOF
-SUBSYSTEM=="ieee80211", ACTION=="add|change", ATTR{macaddress}=="${MAC_ADDRESS}", KERNEL=="phy0", \
-RUN+="/sbin/iw phy phy0 interface add ap0 type __ap", \
-RUN+="/bin/ip link set ap0 address ${MAC_ADDRESS}
-
+SUBSYSTEM=="ieee80211", ACTION=="add|change", KERNEL=="phy0", \
+  RUN+="/sbin/iw phy phy0 interface add ap0 type __ap", \
+  RUN+="/bin/ip link set ap0 address \$attr{macaddress}"
 EOF
 fi
 
@@ -243,16 +242,18 @@ ctrl_interface=/var/run/hostapd
 ctrl_interface_group=0
 interface=ap0
 driver=nl80211
+ieee80211n=1
+ieee80211d=1
 ssid=${AP_SSID}
 hw_mode=${WIFI_MODE}
 channel=11
-wmm_enabled=0
+wmm_enabled=1
 macaddr_acl=0
 auth_algs=1
-wpa=2PASSPHRASE
+wpa=2
 $([ $AP_PASSPHRASE ] && echo "wpa_passphrase=${AP_PASSPHRASE}")
 wpa_key_mgmt=WPA-PSK
-wpa_pairwise=TKIP CCMP
+wpa_pairwise=TKIP
 rsn_pairwise=CCMP
 
 EOF
@@ -327,8 +328,8 @@ if test true != "${STA_ONLY}"; then
 # so we have to delete it
 echo 'Check if hostapd.service is hang cause ap0 exist...'
 hostapd_is_running=\$(service hostapd status | grep -c "Active: active (running)")
-if test 1 -ne "\${hostapd_is_running}"; then
-    rm -rf /var/run/hostapd/ap0 | echo "ap0 interface does not exist, the faillure is elsewhere"
+if test 1 -ne $hostapd_is_running; then
+    rm -rf /var/run/hostapd/ap0 | echo "ap0 interface does not exist, the failure is elsewhere"
 fi
 
 EOF
