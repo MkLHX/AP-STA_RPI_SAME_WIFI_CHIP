@@ -243,7 +243,6 @@ ctrl_interface_group=0
 interface=ap0
 driver=nl80211
 ieee80211n=1
-ieee80211d=1
 ssid=${AP_SSID}
 hw_mode=${WIFI_MODE}
 channel=11
