@@ -327,7 +327,7 @@ if test true != "${STA_ONLY}"; then
 # in our case, it cannot start when /var/run/hostapd/ap0 exist
 # so we have to delete it
 echo 'Check if hostapd.service is hang cause ap0 exist...'
-hostapd_is_running=\$(service hostapd status | grep -c "Active: active (running)")
+hostapd_is_running=\$(systemctl status hostapd | grep -c "Active: active (running)")
 if test 1 -ne $hostapd_is_running; then
     rm -rf /var/run/hostapd/ap0 | echo "ap0 interface does not exist, the failure is elsewhere"
 fi
