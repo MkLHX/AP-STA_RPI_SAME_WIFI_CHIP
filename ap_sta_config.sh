@@ -170,7 +170,6 @@ WIFI_MODE=${ARG_WIFI_MODE:-'g'}
 COUNTRY_CODE=${ARG_COUNTRY_CODE:-'FR'}
 AP_IP=${ARG_AP_IP:-'192.168.10.1'}
 AP_IP_BEGIN=$(echo "${AP_IP}" | sed -e 's/\.[0-9]\{1,3\}$//g')
-#MAC_ADDRESS="$(cat /sys/class/net/wlan0/address)"
 
 if ! test -v AP_ONLY; then
     AP_ONLY="false"
@@ -198,14 +197,6 @@ if test true != "${STA_ONLY}" && test true == "${AP_ONLY}"; then
 fi
 
 if test true != "${STA_ONLY}"; then
-    # Populate `/etc/udev/rules.d/70-persistent-net.rules`
-    _logger "Populate /etc/udev/rules.d/70-persistent-net.rules"
-    bash -c 'cat > /etc/udev/rules.d/70-persistent-net.rules' << EOF
-SUBSYSTEM=="ieee80211", ACTION=="add|change", KERNEL=="phy0", \
-RUN+="/sbin/iw phy phy0 interface add ap0 type __ap", \
-RUN+="/bin/ip link set ap0 address \$attr{macaddress}"
-EOF
-
     # Exclude ap0 from `/etc/dhcpcd.conf`
     sudo bash -c 'cat >> /etc/dhcpcd.conf' << EOF
 # this defines static addressing to ap@wlan0 and disables wpa_supplicant for this interface
