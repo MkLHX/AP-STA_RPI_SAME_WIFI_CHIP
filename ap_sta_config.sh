@@ -258,21 +258,6 @@ ExecStopPost=-/sbin/iw dev ap@%i del
 [Install]
 WantedBy=sys-subsystem-net-devices-%i.device
 EOF
-
-    # Populate `/bin/manage-ap0-iface.sh`
-    _logger "Populate /bin/manage-ap0-iface.sh"
-    bash -c 'cat > /bin/manage-ap0-iface.sh' << EOF
-#!/bin/bash
-# check if hostapd service succes to start or not
-# in our case, it cannot start when /var/run/hostapd/ap0 exist
-# so we have to delete it
-echo 'Check if hostapd.service is hang cause ap0 exist...'
-hostapd_is_running=\$(systemctl status hostapd | grep -c "Active: active (running)")
-if test 1 -ne $hostapd_is_running; then
-    rm -rf /var/run/hostapd/ap0 | echo "ap0 interface does not exist, the failure is elsewhere"
-fi
-EOF
-    chmod +x /bin/manage-ap0-iface.sh
     
     # not used, as the agent is hooked by dhcpcd
     sudo systemctl disable wpa_supplicant.service
