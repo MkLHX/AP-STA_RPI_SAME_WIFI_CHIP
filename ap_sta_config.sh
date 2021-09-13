@@ -170,7 +170,7 @@ WIFI_MODE=${ARG_WIFI_MODE:-'g'}
 COUNTRY_CODE=${ARG_COUNTRY_CODE:-'FR'}
 AP_IP=${ARG_AP_IP:-'192.168.10.1'}
 AP_IP_BEGIN=$(echo "${AP_IP}" | sed -e 's/\.[0-9]\{1,3\}$//g')
-MAC_ADDRESS="$(cat /sys/class/net/wlan0/address)"
+#MAC_ADDRESS="$(cat /sys/class/net/wlan0/address)"
 
 if ! test -v AP_ONLY; then
     AP_ONLY="false"
@@ -198,33 +198,42 @@ if test true != "${STA_ONLY}" && test true == "${AP_ONLY}"; then
 fi
 
 if test true != "${STA_ONLY}"; then
-        # Populate `/etc/udev/rules.d/70-persistent-net.rules`
-        _logger "Populate /etc/udev/rules.d/70-persistent-net.rules"
-        bash -c 'cat > /etc/udev/rules.d/70-persistent-net.rules' << EOF
+    # Populate `/etc/udev/rules.d/70-persistent-net.rules`
+    _logger "Populate /etc/udev/rules.d/70-persistent-net.rules"
+    bash -c 'cat > /etc/udev/rules.d/70-persistent-net.rules' << EOF
 SUBSYSTEM=="ieee80211", ACTION=="add|change", KERNEL=="phy0", \
 RUN+="/sbin/iw phy phy0 interface add ap0 type __ap", \
 RUN+="/bin/ip link set ap0 address \$attr{macaddress}"
 EOF
 
+    # Exclude ap0 from `/etc/dhcpcd.conf`
+    sudo bash -c 'cat >> /etc/dhcpcd.conf' << EOF
+# this defines static addressing to ap@wlan0 and disables wpa_supplicant for this interface
+interface ap@wlan0
+    static ip_address=${AP_IP}/24
+    ipv4only
+    nohook wpa_supplicant
+EOF
+
     # Populate `/etc/dnsmasq.conf`
     _logger "Populate /etc/dnsmasq.conf"
     bash -c 'cat > /etc/dnsmasq.conf' << EOF
-interface=lo,ap0
+interface=lo,ap0@wlan0
 no-dhcp-interface=lo,wlan0
 bind-interfaces
 server=1.1.1.1
 domain-needed
 bogus-priv
 dhcp-range=${AP_IP_BEGIN}.50,${AP_IP_BEGIN}.150,12h
-
+dhcp-option=3,${AP_IP}
 EOF
 
     # Populate `/etc/hostapd/hostapd.conf`
     _logger "Populate /etc/hostapd/hostapd.conf"
-    bash -c 'cat > /etc/hostapd/hostapd.conf' << EOF
+    bash -c 'test -f /etc/hostapd/hostapd.conf || cat > /etc/hostapd/hostapd.conf' << EOF
 ctrl_interface=/var/run/hostapd
 ctrl_interface_group=0
-interface=ap0
+interface=ap0@wlan0
 driver=nl80211
 ieee80211n=1
 ssid=${AP_SSID}
@@ -238,14 +247,25 @@ $([ $AP_PASSPHRASE ] && echo "wpa_passphrase=${AP_PASSPHRASE}")
 wpa_key_mgmt=WPA-PSK
 wpa_pairwise=TKIP
 rsn_pairwise=CCMP
-
 EOF
  
-    # Populate `/etc/default/hostapd`
-    _logger "Populate /etc/default/hostapd"
-    bash -c 'cat > /etc/default/hostapd' << EOF
-DAEMON_CONF="/etc/hostapd/hostapd.conf"
-
+    sudo chmod 600 /etc/hostapd/hostapd.conf
+    sudo bash -c 'SYSTEMD_EDITOR=tee systemctl edit --force --full accesspoint@.service' << EOF
+[Unit]
+Description=IEEE 802.11 ap@%i AP on %i with hostapd
+Wants=wpa_supplicant@%i.service
+[Service]
+Type=forking
+PIDFile=/run/hostapd.pid
+Restart=on-failure
+RestartSec=2
+Environment=DAEMON_CONF=/etc/hostapd/hostapd.conf
+EnvironmentFile=-/etc/default/hostapd
+ExecStartPre=/sbin/iw dev %i interface add ap@%i type __ap
+ExecStart=/usr/sbin/hostapd -i ap@%i -P /run/hostapd.pid -B $DAEMON_OPTS ${DAEMON_CONF}
+ExecStopPost=-/sbin/iw dev ap@%i del
+[Install]
+WantedBy=sys-subsystem-net-devices-%i.device
 EOF
 
     # Populate `/bin/manage-ap0-iface.sh`
@@ -260,87 +280,47 @@ hostapd_is_running=\$(systemctl status hostapd | grep -c "Active: active (runnin
 if test 1 -ne $hostapd_is_running; then
     rm -rf /var/run/hostapd/ap0 | echo "ap0 interface does not exist, the failure is elsewhere"
 fi
-
 EOF
     chmod +x /bin/manage-ap0-iface.sh
     
-    # Populate `/bin/rpi-wifi.sh`
-    _logger "Populate /bin/rpi-wifi.sh"
-    bash -c 'cat > /bin/rpi-wifi.sh' << EOF
-#!/bin/bash
-echo 'Starting Wifi AP and STA client...'
-/sbin/ifdown --force wlan0
-/sbin/ifdown --force ap0
-/sbin/ifup ap0
-/sbin/ifup wlan0
-$([ "${NO_INTERNET-}" != "true" ] && echo "sysctl -w net.ipv4.ip_forward=1")
-$([ "${NO_INTERNET-}" != "true" ] && echo "iptables -t nat -A POSTROUTING -s ${AP_IP_BEGIN}.0/24 ! -d ${AP_IP_BEGIN}.0/24 -j MASQUERADE")
-$([ "${NO_INTERNET-}" != "true" ] && echo "systemctl restart dnsmasq")
-echo 'WPA Supplicant reconfigure in 5sec...'
-sleep 5
-/sbin/wpa_cli -i wlan0 reconfigure
-/sbin/iw dev wlan0 set power_save off
-/sbin/iw dev ap0 set power_save off
+    # not used, as the agent is hooked by dhcpcd
+    sudo systemctl disable wpa_supplicant.service
 
+    # We can then follow Raspberry’s documentation to enable routing and IP masquerading:
+    sudo DEBIAN_FRONTEND=noninteractive apt install -y netfilter-persistent iptables-persistent
+
+    sudo bash -c 'test -f /etc/sysctl.d/routed-ap.conf || cat >/etc/sysctl.d/routed-ap.conf' << EOF
+# https://www.raspberrypi.org/documentation/configuration/wireless/access-point-routed.md
+# Enable IPv4 routing
+net.ipv4.ip_forward=1
 EOF
-    chmod +x /bin/rpi-wifi.sh
 fi
 
 if test true != "${AP_ONLY}"; then
     # Populate `/etc/wpa_supplicant/wpa_supplicant.conf`
     _logger "Populate /etc/wpa_supplicant/wpa_supplicant.conf"
-    bash -c 'cat > /etc/wpa_supplicant/wpa_supplicant.conf' << EOF
+    sudo bash -c 'test -f /etc/wpa_supplicant/wpa_supplicant.conf || cat > /etc/wpa_supplicant/wpa_supplicant.conf' << EOF
 ctrl_interface=DIR=/var/run/wpa_supplicant GROUP=netdev
 update_config=1
 country=${COUNTRY_CODE}
 network={
     ssid="${CLIENT_SSID}"
     $([ $CLIENT_PASSPHRASE ] && echo "psk=\"${CLIENT_PASSPHRASE}\"")
-    id_str="AP1"
     scan_ssid=1
 }
-
 EOF
+sudo chmod 600 /etc/wpa_supplicant/wpa_supplicant.conf
 fi
 
-# Populate `/etc/network/interfaces`
-# TODO manage eth0 interface
-# if current device is model B+ with ethernet port
-# auto eth0
-# allow-hotplug eth0
-# iface eth0 inet manual
-#
-_logger "Populate /etc/network/interfaces"
-bash -c 'cat > /etc/network/interfaces' << EOF
-source-directory /etc/network/interfaces.d
-
-auto lo
-auto ap0
-auto wlan0
-
-iface lo inet loopback
-
-allow-hotplug ap0
-iface ap0 inet static
-    address ${AP_IP}
-    netmask 255.255.255.0
-    # network ${AP_IP_BEGIN}.0
-    # broadcast ${AP_IP_BEGIN}.255
-    # gateway ${AP_IP}
-    hostapd /etc/hostapd/hostapd.conf
-
-allow-hotplug wlan0
-iface wlan0 inet manual
-    wpa-roam /etc/wpa_supplicant/wpa_supplicant.conf
-iface AP1 inet dhcp
-
-EOF
-
 if test true != "${STA_ONLY}"; then
-    # unmask and enable dnsmasq.service / hostapd.service
-    _logger "Unmask and enable dnsmasq.service / hostapd.service"
-    systemctl unmask dnsmasq.service hostapd.service
-    systemctl enable dnsmasq.service hostapd.service
+    # enable dnsmasq.service / disable hostapd.service
+    _logger "enable dnsmasq.service / disable hostapd.service"
+    systemctl unmask dnsmasq.service
+    systemctl enable dnsmasq.service
+    sudo systemctl stop hostapd # if the default hostapd service was active before
+    sudo systemctl disable hostapd # if the default hostapd service was enabled before
+    sudo systemctl enable accesspoint@wlan0.service
+    sudo rfkill unblock wlan
     systemctl daemon-reload
 fi
 
@@ -348,6 +328,16 @@ fi
 mkdir -p /var/log/ap_sta_wifi
 touch /var/log/ap_sta_wifi/ap0_mgnt.log
 touch /var/log/ap_sta_wifi/on_boot.log
+
+# Add firewall rules
+sudo iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
+sudo iptables -t nat -A POSTROUTING -o wlan0 -j MASQUERADE
+sudo iptables -A FORWARD -i wlan0 -o ap@wlan0 -m state --state RELATED,ESTABLISHED -j ACCEPT
+sudo iptables -A FORWARD -i ap@wlan0 -o wlan0 -j ACCEPT
+sudo netfilter-persistent save
+
+# persist powermanagement off for wlan0
+grep 'iw dev wlan0 set power_save off' /etc/rc.local || sudo sed -i 's:^exit 0:iw dev wlan0 set power_save off\n\nexit 0:' /etc/rc.local
 
 # Finish
 if test true == "${STA_ONLY}"; then
@@ -368,5 +358,5 @@ fi
 if test true != "${STA_ONLY}"; then
     _logger "Wait during wlan0 reconnecting to internet..."
     sleep 15
-    curl https://raw.githubusercontent.com/MkLHX/AP_STA_RPI_SAME_WIFI_CHIP/master/ap_sta_cron.sh | bash -s --
+    #curl https://raw.githubusercontent.com/MkLHX/AP_STA_RPI_SAME_WIFI_CHIP/master/ap_sta_cron.sh | bash -s --
 fi
